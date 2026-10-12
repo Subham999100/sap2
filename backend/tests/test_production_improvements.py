@@ -160,6 +160,7 @@ def test_consistent_persistence_across_endpoints(test_user_and_chat):
     assert data["message_id"] is not None
 
     # Verify in DB that citations were persisted
+    db.commit()
     citations_in_db = db.query(Citation).filter(Citation.message_id == data["message_id"]).all()
     assert len(citations_in_db) > 0
     assert citations_in_db[0].document_name is not None

@@ -1,5 +1,5 @@
 import re
-from typing import Tuple
+from typing import Tuple, Optional, List, Dict
 
 
 SAP_CORE_MODULES = {
@@ -7,7 +7,8 @@ SAP_CORE_MODULES = {
     "basis", "abap", "fiori", "s/4hana", "s4hana", "s4", "ecc", "btp",
     "netweaver", "successfactors", "ariba", "concur", "hybris", "c4c",
     "bw", "bi", "crm", "srm", "ewm", "tm", "grc", "mdg", "solman",
-    "brim", "cc", "ci", "som", "fica", "fi-ca", "bit", "cit"
+    "brim", "cc", "ci", "som", "fica", "fi-ca", "bit", "cit",
+    "rar", "odi", "daas", "pob"
 }
 
 
@@ -41,7 +42,14 @@ SAP_KEYWORDS = {
     "billable item class", "consumption item class", "partner settlement",
     "revenue sharing", "rating logic", "rating process", "invoicing document",
     "billable item management", "usage-based rating", "usage-based billing",
-    "usage metering", "consumption metering", "charge calculation"
+    "usage metering", "consumption metering", "charge calculation",
+    # Subledger, clearing, and financial reconciliation terms
+    "clearing", "cleared", "clear document", "dunning", "payment lot",
+    "payment allocation", "open item", "open items", "open receivable",
+    "subledger", "subledger document", "contract account", "order distribution",
+    "order distribution infrastructure", "revenue accounting", "revenue accounting and reporting",
+    "performance obligation", "clarification list", "residual item", "partial payment",
+    "on-account payment", "unallocated payment", "charging contract"
 }
 
 
@@ -56,7 +64,7 @@ GENERAL_UNRELATED_PATTERNS = [
 
 
 class SAPClassifier:
-    """Strict SAP-domain classifier with comprehensive SAP BRIM coverage."""
+    """Strict SAP-domain classifier with comprehensive SAP BRIM coverage and multi-turn context support."""
 
     @staticmethod
     def _contains_term(text: str, term: str) -> bool:
@@ -81,7 +89,7 @@ class SAPClassifier:
         return bool(re.search(pattern, text, re.IGNORECASE))
 
     @classmethod
-    def classify(cls, query: str) -> Tuple[bool, str]:
+    def classify(cls, query: str, chat_history: Optional[List[Dict[str, str]]] = None) -> Tuple[bool, str]:
         """
         Returns:
             (True, 'sap_domain_verified') for SAP-related queries
@@ -124,11 +132,13 @@ class SAPClassifier:
             for module in SAP_CORE_MODULES
         )
 
-        # SAP transaction-code pattern.
+        # SAP transaction-code pattern including FI-CA & BRIM monitoring codes.
         has_tcode_pattern = bool(
             re.search(
                 r"\b(?:me21n|va01|fb01|fb50|fb60|migo|miro|vl01n|vf01|"
-                r"co01|su01|pfcg|sm50|sm21|st22|st03n|se11|se16n|se38|se80)\b",
+                r"co01|su01|pfcg|sm50|sm21|st22|st03n|se11|se16n|se38|se80|"
+                r"fpl9|fpe[1-3]|fp04|fpy1|fpva|fpvb|fpo1|fp06|fp07|fp08|fp40|"
+                r"fkkbix[a-z0-9_]*|dfkk[a-z0-9_]*)\b",
                 text,
                 re.IGNORECASE
             )
@@ -153,6 +163,26 @@ class SAPClassifier:
             or has_sap_table
         ):
             return True, "sap_domain_verified"
+
+        # Multi-turn conversational context check:
+        # If this is an ongoing conversation with established SAP context,
+        # allow valid follow-up questions referencing prior turn concepts/entities.
+        if chat_history:
+            recent_context = " ".join((turn.get("content") or "") for turn in chat_history[-3:]).lower()
+            context_has_sap = any(cls._contains_term(recent_context, kw) for kw in (
+                "sap", "brim", "som", "cc", "ci", "fica", "fi-ca", "rar", "fpl9", "fp04",
+                "invoice", "contract", "billing", "clearing", "receivable"
+            ))
+            if context_has_sap:
+                is_conversational_followup = bool(re.search(
+                    r"\b(?:what about|how about|why did|can we|could this|is that|does that|"
+                    r"how to|what is the next step|explain step|what causes that|why was|"
+                    r"that issue|the previous|that document|that invoice|that account|it|this|reverse)\b",
+                    text,
+                    re.IGNORECASE
+                ))
+                if is_conversational_followup:
+                    return True, "sap_domain_verified"
 
         # Everything without SAP context is rejected.
         return False, "I can only help with SAP and SAP-related topics."

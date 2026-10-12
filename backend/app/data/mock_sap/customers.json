@@ -1,0 +1,17 @@
+[
+  {
+    "customer_id": "CUST-1001",
+    "name": "Acme Telecom",
+    "status": "ACTIVE"
+  },
+  {
+    "customer_id": "CUST-1002",
+    "name": "Nova Communications",
+    "status": "ACTIVE"
+  },
+  {
+    "customer_id": "CUST-1003",
+    "name": "Vertex Networks",
+    "status": "ACTIVE"
+  }
+]

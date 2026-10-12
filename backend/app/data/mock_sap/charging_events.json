@@ -1,0 +1,50 @@
+[
+  {
+    "event_id": "EVT-001",
+    "account_id": "CA-2001",
+    "service": "DATA",
+    "quantity": 10,
+    "amount": 40.00,
+    "timestamp": "2026-09-15T10:30:00Z"
+  },
+  {
+    "event_id": "EVT-002",
+    "account_id": "CA-2001",
+    "service": "VOICE",
+    "quantity": 50,
+    "amount": 35.00,
+    "timestamp": "2026-09-18T14:20:00Z"
+  },
+  {
+    "event_id": "EVT-003",
+    "account_id": "CA-2001",
+    "service": "SMS",
+    "quantity": 100,
+    "amount": 25.00,
+    "timestamp": "2026-09-22T09:15:00Z"
+  },
+  {
+    "event_id": "EVT-004",
+    "account_id": "CA-2002",
+    "service": "DATA",
+    "quantity": 20,
+    "amount": 60.00,
+    "timestamp": "2026-09-16T11:00:00Z"
+  },
+  {
+    "event_id": "EVT-005",
+    "account_id": "CA-2002",
+    "service": "VOICE",
+    "quantity": 30,
+    "amount": 25.00,
+    "timestamp": "2026-09-20T16:45:00Z"
+  },
+  {
+    "event_id": "EVT-006",
+    "account_id": "CA-2003",
+    "service": "DATA",
+    "quantity": 15,
+    "amount": 50.00,
+    "timestamp": "2026-09-19T12:00:00Z"
+  }
+]
