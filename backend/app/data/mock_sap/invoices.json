@@ -1,0 +1,32 @@
+[
+  {
+    "invoice_id": "INV-1042",
+    "account_id": "CA-2001",
+    "billing_id": "BILL-3001",
+    "total_amount": 125.00,
+    "currency": "USD",
+    "status": "POSTED",
+    "invoice_date": "2026-10-01",
+    "due_date": "2026-10-31"
+  },
+  {
+    "invoice_id": "INV-1043",
+    "account_id": "CA-2002",
+    "billing_id": "BILL-3002",
+    "total_amount": 85.00,
+    "currency": "USD",
+    "status": "POSTED",
+    "invoice_date": "2026-10-01",
+    "due_date": "2026-10-31"
+  },
+  {
+    "invoice_id": "INV-1044",
+    "account_id": "CA-2003",
+    "billing_id": "BILL-3003",
+    "total_amount": 50.00,
+    "currency": "EUR",
+    "status": "POSTED",
+    "invoice_date": "2026-10-01",
+    "due_date": "2026-10-31"
+  }
+]

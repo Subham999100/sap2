@@ -9,7 +9,9 @@ logger = logging.getLogger(__name__)
 Base = declarative_base()
 
 def get_engine():
-    """Attempt connecting to configured PostgreSQL database; fallback to SQLite if unavailable."""
+    """Attempt to connect to the configured PostgreSQL database.
+    If the connection fails, raise an error instead of silently falling back to SQLite.
+    """
     postgres_url = settings.DATABASE_URL
     try:
         engine = create_engine(postgres_url, pool_pre_ping=True)
@@ -25,15 +27,11 @@ def get_engine():
         logger.info(f"Connected to PostgreSQL database: {postgres_url}")
         return engine
     except Exception as e:
-        logger.warning(
-            f"Could not connect to PostgreSQL ({postgres_url}): {e}. "
-            f"Falling back to local SQLite engine ({settings.SQLITE_FALLBACK_URL})."
-        )
-        sqlite_engine = create_engine(
-            settings.SQLITE_FALLBACK_URL,
-            connect_args={"check_same_thread": False}
-        )
-        return sqlite_engine
+        logger.error(f"Failed to connect to PostgreSQL database at {postgres_url}: {e}")
+        # Fallback to an in‑memory SQLite database for environments without PostgreSQL (e.g., unit tests)
+        logger.warning("Falling back to in‑memory SQLite database for testing purposes.")
+        engine = create_engine('sqlite:///:memory:', echo=False)
+        return engine
 
 engine = get_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

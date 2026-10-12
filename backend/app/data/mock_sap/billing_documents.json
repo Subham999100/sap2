@@ -1,0 +1,35 @@
+[
+  {
+    "billing_id": "BILL-3001",
+    "account_id": "CA-2001",
+    "period": "2026-09",
+    "total_amount": 100.00,
+    "status": "POSTED",
+    "charging_event_ids": [
+      "EVT-001",
+      "EVT-002",
+      "EVT-003"
+    ]
+  },
+  {
+    "billing_id": "BILL-3002",
+    "account_id": "CA-2002",
+    "period": "2026-09",
+    "total_amount": 85.00,
+    "status": "POSTED",
+    "charging_event_ids": [
+      "EVT-004",
+      "EVT-005"
+    ]
+  },
+  {
+    "billing_id": "BILL-3003",
+    "account_id": "CA-2003",
+    "period": "2026-09",
+    "total_amount": 50.00,
+    "status": "POSTED",
+    "charging_event_ids": [
+      "EVT-006"
+    ]
+  }
+]

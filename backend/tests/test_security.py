@@ -22,12 +22,14 @@ def test_admin_ingestion_blocked_for_normal_users():
     assert resp_no_token.status_code == 403
 
 def test_admin_ingestion_allowed_with_admin_key():
-    resp = client.post(
-        "/api/admin/documents/ingest",
-        headers={"X-Admin-Key": settings.ADMIN_API_KEY}
-    )
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "success"
+    from unittest.mock import patch
+    with patch("backend.app.api.admin.run_ingestion", return_value=[]):
+        resp = client.post(
+            "/api/admin/documents/ingest",
+            headers={"X-Admin-Key": settings.ADMIN_API_KEY}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "success"
 
 def test_no_document_download_routes_exist():
     """Verify that no public route exists allowing direct document downloads."""

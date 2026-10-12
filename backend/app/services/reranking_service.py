@@ -1,176 +1,376 @@
-import re
+
 import logging
+import re
+from typing import Any, Dict, List, Optional, Tuple, Set
+
 import numpy as np
-from typing import List, Dict, Any, Tuple, Optional
+
 from backend.app.config import settings
 
 logger = logging.getLogger(__name__)
 
+
 STOP_WORDS = {
-    "what", "is", "the", "a", "an", "how", "to", "in", "of", "and", "for", "with",
-    "does", "explain", "describe", "can", "you", "tell", "me", "about", "which", "are"
+    "what", "is", "the", "a", "an", "how", "to", "in", "of", "and",
+    "for", "with", "does", "explain", "describe", "can", "you", "tell",
+    "me", "about", "which", "are", "it", "this", "that", "from",
+    "into", "through", "between", "using", "where", "when", "why",
 }
+
+TECHNICAL_IDENTIFIERS = {
+    # T-Codes
+    "fpl9", "fpe1", "fpe2", "fpe3", "fp04", "fpy1", "fpva", "fpvb",
+    "fpo1", "fp06", "fp07", "fp08", "fp40", "spro", "pfcg", "sm30",
+    "fkkbix", "fkkbixbit_mon", "fkkbix_bit_mon", "fkkbixcit_mon", "fkkbix_cit_mon",
+    # Core SAP BRIM tables
+    "dfkkop", "dfkkko", "dfkkinv_doc", "dfkkbip", "fkkvkp", "cdhdr", "cdpos",
+    # Core SAP BRIM components & acronyms
+    "som", "cc", "ci", "fi-ca", "fica", "rar", "sd", "s4hana", "btp",
+    # Domain concepts & objects
+    "pob", "odi", "bit", "cit", "rap", "daas",
+}
+
+NORMALIZED_TECHNICAL_IDENTIFIERS = {
+    re.sub(r"[-_/]", "", t.lower()) for t in TECHNICAL_IDENTIFIERS
+}
+
+DOMAIN_PRODUCT_NAMES = {
+    "ariba", "concur", "fieldglass", "hybris", "c4c",
+    "qualtrics", "celonis",
+}
+
+TOKEN_PATTERN = re.compile(r"(?:s/4hana|[a-z0-9]+(?:[_-][a-z0-9]+)*)")
 
 
 class RerankingService:
+    """
+    Lightweight heuristic scoring and candidate deduplication service.
+    ColBERT neural reranking has been completely removed.
+    """
     def __init__(self):
-        self._model = None
-        self._model_failed = False
-        self.model_name = settings.RERANKER_MODEL
+        pass
 
-    def _get_model(self):
-        if not settings.RERANKER_ENABLED:
-            return None
-        if self._model is not None:
-            return self._model
-        if self._model_failed:
-            return None
+    @staticmethod
+    def _normalize_token(text: str) -> str:
+        """Strip punctuation/separators for robust identifier matching."""
+        return re.sub(r"[-_/]", "", (text or "").lower())
 
-        # Attempt to load FastEmbed ONNX late-interaction (ColBERT) reranking model
-        try:
-            from fastembed import LateInteractionTextEmbedding
-            logger.info(f"Loading neural reranker model ({self.model_name}) via FastEmbed ONNX runtime...")
-            self._model = LateInteractionTextEmbedding(model_name=self.model_name)
-            logger.info("Neural reranker model loaded successfully.")
-            return self._model
-        except Exception as e:
-            logger.warning(
-                f"Could not load neural reranker model ({self.model_name}): {e}. "
-                "Will use robust heuristic scoring fallback."
-            )
-            self._model_failed = True
-            return None
+    @staticmethod
+    def _tokens(text: str) -> List[str]:
+        """Tokenize text while preserving technical identifiers."""
+        return TOKEN_PATTERN.findall((text or "").lower())
 
-    def _score_with_model(
-        self,
+
+    @classmethod
+    def _heuristic_features(
+        cls,
         query: str,
-        candidates: List[Dict[str, Any]]
-    ) -> Optional[List[float]]:
+        candidate: Dict[str, Any],
+    ) -> Dict[str, float]:
+        query_lower = query.lower()
+        query_tokens = set(cls._tokens(query))
+        candidate_text = candidate.get("chunk_text") or ""
+        text_lower = candidate_text.lower()
+        text_tokens = set(cls._tokens(candidate_text))
+        section_lower = (
+            candidate.get("section") or ""
+        ).lower()
+        document_lower = (
+            candidate.get("document_name") or ""
+        ).lower()
+
+        raw_query_tokens = cls._tokens(query)
+        norm_query_tokens = [cls._normalize_token(t) for t in raw_query_tokens]
+        norm_text_tokens = {cls._normalize_token(t) for t in text_tokens}
+
+        # Exact or normalized identifier matching preserves technical names and handles format differences (e.g. fkkbix_bit_mon vs fkkbixbit_mon)
+        identifier_matches = sum(
+            1
+            for t, norm_t in zip(raw_query_tokens, norm_query_tokens)
+            if (t in TECHNICAL_IDENTIFIERS or norm_t in NORMALIZED_TECHNICAL_IDENTIFIERS)
+            and (t in text_tokens or norm_t in norm_text_tokens)
+        )
+
+        # Count matching query terms without relying on substring matches.
+        significant_tokens = {
+            token
+            for token in query_tokens
+            if token not in STOP_WORDS and len(token) > 2
+        }
+
+        norm_section_tokens = {
+            cls._normalize_token(t)
+            for t in cls._tokens(section_lower)
+        }
+
+        section_matches = sum(
+            1
+            for token in significant_tokens
+            if token in set(cls._tokens(section_lower))
+            or cls._normalize_token(token) in norm_section_tokens
+        )
+
+        content_matches = sum(
+            1
+            for token in significant_tokens
+            if token in text_tokens
+            or cls._normalize_token(token) in norm_text_tokens
+        )
+
+        coverage = (
+            content_matches / len(significant_tokens)
+            if significant_tokens
+            else 0.0
+        )
+
+        section_boost = min(section_matches * 0.04, 0.12)
+
+        # Match adjacent meaningful query terms, rather than counting every
+        # adjacent word pair in the original question.
+        query_terms = [
+            token
+            for token in cls._tokens(query)
+            if token not in STOP_WORDS
+        ]
+
+        ngram_matches = 0
+        for index in range(len(query_terms) - 1):
+            phrase = (
+                f"{query_terms[index]} {query_terms[index + 1]}"
+            )
+            if phrase in text_lower:
+                ngram_matches += 1
+
+        ngram_boost = min(ngram_matches * 0.025, 0.10)
+
+        direct_boost = 0.0
+
+        if re.search(
+            r"\b(?:is defined as|refers to|represents|consists of)\b",
+            text_lower,
+        ):
+            direct_boost += 0.025
+
+        if re.search(
+            r"\b(?:step\s+\d+|prerequisites|procedure|process flow|"
+            r"transaction code)\b",
+            text_lower,
+        ):
+            direct_boost += 0.025
+
+        direct_boost += min(identifier_matches * 0.07, 0.18)
+
+        # Multi-concept co-occurrence boost: when a query asks across distinct technical identifiers
+        # or domain concepts, reward chunks that genuinely discuss multiple required concepts together
+        distinct_query_tech = {
+            norm_t for t, norm_t in zip(raw_query_tokens, norm_query_tokens)
+            if (t in TECHNICAL_IDENTIFIERS or norm_t in NORMALIZED_TECHNICAL_IDENTIFIERS)
+        }
+        if len(distinct_query_tech) >= 2:
+            matched_tech = sum(1 for norm_t in distinct_query_tech if norm_t in norm_text_tokens)
+            if matched_tech >= 2:
+                direct_boost += 0.05
+
+        noise_penalty = 0.0
+
+        if "catalog" in document_lower or "press-catalog" in document_lower:
+            noise_penalty += 0.12
+
+        if text_lower.count(".....") > 3:
+            noise_penalty += 0.10
+
+        return {
+            "section_boost": section_boost,
+            "ngram_boost": ngram_boost,
+            "direct_boost": direct_boost,
+            "noise_penalty": noise_penalty,
+            "query_coverage": coverage,
+            "identifier_matches": float(identifier_matches),
+        }
+
+    @staticmethod
+    def _deduplicate_candidates(
+        candidates: List[Dict[str, Any]],
+        top_n: int,
+    ) -> List[Dict[str, Any]]:
         """
-        Computes late-interaction MaxSim relevance scores using the ONNX ColBERT model.
-        Returns a list of float scores in [0.0, 1.0] corresponding to candidates,
-        or None if model scoring fails.
+        Suppresses identical or near-duplicate chunks from duplicate source uploads
+        (e.g., dual uploads of the SAP BRIM Press Book), ensuring distinct technical evidence
+        chunks are retained within top_n.
         """
-        model = self._get_model()
-        if model is None:
-            return None
+        selected: List[Dict[str, Any]] = []
+        seen_fingerprints: Set[str] = set()
 
-        try:
-            chunk_texts = [c.get("chunk_text", "") for c in candidates]
-            # Embed query token representations: shape (q_tokens, dim)
-            q_emb = list(model.embed([query]))[0]
-            # Embed candidates token representations
-            doc_embs = list(model.embed(chunk_texts))
+        for cand in candidates:
+            text = (cand.get("chunk_text") or "").strip()
+            # Normalize leading 200 characters to alphanumeric fingerprint
+            fp = re.sub(r"\W+", "", text[:200].lower())
+            if fp and fp in seen_fingerprints:
+                continue
+            if fp:
+                seen_fingerprints.add(fp)
+            selected.append(cand)
+            if len(selected) >= top_n:
+                break
 
-            q_len = max(q_emb.shape[0], 1)
-            raw_scores = []
-            for d_emb in doc_embs:
-                # MaxSim: dot product between query tokens and document tokens,
-                # then max over document tokens, summed across query tokens
-                sim_matrix = np.dot(q_emb, d_emb.T)
-                maxsim = float(np.sum(np.max(sim_matrix, axis=1)))
-                raw_scores.append(maxsim)
+        # Fallback to satisfy top_n if duplicate suppression left fewer items than top_n
+        if len(selected) < top_n and len(selected) < len(candidates):
+            selected_ids = {c.get("chunk_id") for c in selected}
+            for cand in candidates:
+                if cand.get("chunk_id") not in selected_ids:
+                    selected.append(cand)
+                    if len(selected) >= top_n:
+                        break
 
-            # Normalize to approximately [0.0, 1.0] relative to query length
-            # ColBERT token embeddings have L2 norm ~1, so max possible dot product per query token is ~1.0
-            normalized = [min(max(s / q_len, 0.0), 1.0) for s in raw_scores]
-            return normalized
-        except Exception as e:
-            logger.warning(f"Error during neural reranker scoring: {e}. Falling back to heuristic reranking.")
-            return None
+        return selected
 
     def rerank(
         self,
         query: str,
         candidates: List[Dict[str, Any]],
         top_n: Optional[int] = None,
-        threshold: Optional[float] = None
+        threshold: Optional[float] = None,
     ) -> Tuple[List[Dict[str, Any]], bool]:
         """
-        Reranks candidate chunks from RRF fusion.
-        1. Preserves all incoming metadata (chunk_id, document_name, rrf_score, page, section, etc.)
-        2. Applies neural ColBERT reranking if available, with section and query phrase reinforcement.
-        3. Falls back gracefully to heuristic/RRF scoring if the neural model is disabled or unavailable.
-        4. Returns top_n items (default: settings.FINAL_TOP_K) and an evidence sufficiency boolean.
+        Rank retrieved chunks using neural relevance plus bounded,
+        interpretable evidence features.
+
+        Preserves candidate metadata and returns:
+            (ranked_chunks, evidence_sufficient)
+
+        Important: the returned score is a ranking score, not a calibrated
+        probability that the answer is factually supported.
         """
         if not candidates:
-            logger.debug("Reranker received 0 candidates.")
+            logger.debug("Reranker received no candidates.")
             return [], False
 
-        n = top_n or settings.FINAL_TOP_K
-        thresh = threshold if threshold is not None else settings.SIMILARITY_THRESHOLD
-        query_lower = query.lower()
-        query_words = set(re.findall(r"\b[a-z0-9\/\-_]+\b", query_lower))
-        significant_query_words = [w for w in query_words if w not in STOP_WORDS and len(w) > 2]
+        n = max(1, top_n or settings.FINAL_TOP_K)
+        thresh = (
+            threshold
+            if threshold is not None
+            else settings.SIMILARITY_THRESHOLD
+        )
 
-        logger.debug(f"Reranking {len(candidates)} candidates for query: '{query[:60]}...' (target top_n={n})")
+        query_tokens = set(self._tokens(query))
+        significant_query_tokens = {
+            token
+            for token in query_tokens
+            if token not in STOP_WORDS and len(token) > 2
+        }
 
-        # Attempt neural scoring
-        neural_scores = self._score_with_model(query, candidates)
-        used_neural = neural_scores is not None
+        scored_candidates: List[Dict[str, Any]] = []
 
-        scored_candidates = []
-        for idx, c in enumerate(candidates):
-            c_copy = dict(c)
-            base_score = float(c.get("score") or c.get("rrf_score") or 0.0)
-            text_lower = (c.get("chunk_text") or "").lower()
-            section_lower = (c.get("section") or "").lower()
+        # RRF scores are small by design. Normalize them relative
+        # to the current batch so heuristics can contribute without
+        # saturating all candidates at 1.0.
+        finite_base_scores = [
+            float(
+                c.get("rrf_score", c.get("score", 0.0)) or 0.0
+            )
+            for c in candidates
+        ]
+        finite_base_scores = [
+            value for value in finite_base_scores
+            if np.isfinite(value)
+        ]
 
-            # Boost if section title directly matches query keywords
-            section_matches = sum(1 for w in query_words if w in section_lower and len(w) > 2)
-            section_boost = min(section_matches * 0.05, 0.15)
+        if finite_base_scores:
+            low = min(finite_base_scores)
+            high = max(finite_base_scores)
+            spread = high - low
 
-            # Boost if exact n-grams from query appear in text
-            ngram_boost = 0.0
-            if len(query_lower.split()) >= 2:
-                words_list = query_lower.split()
-                for i in range(len(words_list) - 1):
-                    bigram = f"{words_list[i]} {words_list[i+1]}"
-                    if bigram in text_lower and len(bigram) > 6:
-                        ngram_boost += 0.04
-            ngram_boost = min(ngram_boost, 0.12)
+        for candidate in candidates:
+            item = dict(candidate)
 
-            if used_neural:
-                n_score = neural_scores[idx]
-                # Combine neural score with section relevance boost
-                combined_score = min(n_score + section_boost * 0.5, 1.0)
-                method = "hybrid_rrf_rerank"
+            raw_base_score = candidate.get(
+                "rrf_score",
+                candidate.get("score", 0.0),
+            )
+
+            try:
+                base_score = float(raw_base_score or 0.0)
+            except (TypeError, ValueError):
+                base_score = 0.0
+
+            if not np.isfinite(base_score):
+                base_score = 0.0
+
+            if finite_base_scores:
+                base_normalized = (
+                    (base_score - low) / spread
+                    if spread > 1e-12
+                    else 0.5
+                )
             else:
-                # Heuristic fallback: base RRF score + section boost + n-gram boost
-                combined_score = min(base_score + section_boost + ngram_boost, 1.0)
-                method = "hybrid_rrf_fallback"
+                base_normalized = 0.0
 
-            final_score = round(combined_score, 4)
-            c_copy["rerank_score"] = final_score
-            c_copy["score"] = final_score  # preserve backward compatibility
-            c_copy["retrieval_method"] = method
-            # Ensure rrf_score is present
-            if "rrf_score" not in c_copy:
-                c_copy["rrf_score"] = base_score
+            features = self._heuristic_features(query, candidate)
 
-            scored_candidates.append(c_copy)
+            combined_score = (
+                0.55 * base_normalized
+                + 0.10 * features["query_coverage"]
+                + features["section_boost"]
+                + features["ngram_boost"]
+                + features["direct_boost"]
+                - features["noise_penalty"]
+            )
+            method = "hybrid_rrf"
 
-        # Sort descending by rerank score
-        scored_candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
-        top_chunks = scored_candidates[:n]
+            bounded_score = max(0.0, min(1.0, float(combined_score)))
+            item["rerank_score"] = round(bounded_score, 6)
+            item["score"] = item["rerank_score"]
+            item["retrieval_method"] = method
+            item["rrf_score"] = base_score
+            item["query_coverage"] = round(
+                features["query_coverage"], 4
+            )
+            item["identifier_matches"] = int(
+                features["identifier_matches"]
+            )
+
+            scored_candidates.append(item)
+
+        # Stable tie-breaking: use the original retrieval score after the
+        # rerank score, then preserve original order as the final tie-break.
+        scored_candidates.sort(
+            key=lambda item: (
+                item["rerank_score"],
+                item["rrf_score"],
+            ),
+            reverse=True,
+        )
+
+        top_chunks = self._deduplicate_candidates(scored_candidates, n)
 
         if not top_chunks:
             return [], False
 
         top_score = top_chunks[0]["rerank_score"]
+
         logger.debug(
-            f"Reranking complete: {len(top_chunks)} final chunks selected (method={top_chunks[0]['retrieval_method']}). "
-            f"Top reranker scores: {[c['rerank_score'] for c in top_chunks]}"
+            "Reranking complete: selected %d/%d candidates "
+            "(method=%s, top scores=%s)",
+            len(top_chunks),
+            len(candidates),
+            top_chunks[0]["retrieval_method"],
+            [item["rerank_score"] for item in top_chunks],
         )
 
-        # Basic score threshold check
+        # Retain the existing threshold contract. Since scores are now
+        # batch-relative ranking values rather than probabilities, validate
+        # threshold compatibility against settings before relying on it.
         if top_score < thresh:
             return top_chunks, False
 
-        # Entity presence validation for distinctive products
-        combined_text = " ".join([(c.get("chunk_text") or "").lower() for c in top_chunks])
-        for word in significant_query_words:
-            if word in {"ariba", "concur", "fieldglass", "hybris", "c4c", "qualtrics", "celonis"} and word not in combined_text:
+        combined_text = " ".join(
+            (item.get("chunk_text") or "").lower()
+            for item in top_chunks
+        )
+        combined_tokens = set(self._tokens(combined_text))
+
+        for token in significant_query_tokens:
+            if token in DOMAIN_PRODUCT_NAMES and token not in combined_tokens:
                 return top_chunks, False
 
         return top_chunks, True

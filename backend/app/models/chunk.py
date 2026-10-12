@@ -1,5 +1,4 @@
 import uuid
-import json
 from typing import List
 from sqlalchemy import Column, String, Integer, Text, ForeignKey, TypeDecorator
 from sqlalchemy.orm import relationship
@@ -13,32 +12,25 @@ class EmbeddingVector(TypeDecorator):
     cache_ok = True
 
     def load_dialect_impl(self, dialect):
-        if dialect.name == "postgresql":
-            return dialect.type_descriptor(Vector(settings.EMBEDDING_DIM))
-        return dialect.type_descriptor(Text())
+        if dialect.name != "postgresql":
+            raise RuntimeError("Only PostgreSQL with pgvector is supported; SQLite fallback removed.")
+        return dialect.type_descriptor(Vector(settings.EMBEDDING_DIM))
 
     def process_bind_param(self, value, dialect):
         if value is None:
             return None
-        if dialect.name == "postgresql":
-            return value
-        if isinstance(value, (list, tuple)):
-            return json.dumps(list(value))
+        if dialect.name != "postgresql":
+            raise RuntimeError("Only PostgreSQL with pgvector is supported; binding not possible.")
         return value
 
     def process_result_value(self, value, dialect):
         if value is None:
             return None
-        if dialect.name == "postgresql":
-            if hasattr(value, "tolist"):
-                return value.tolist()
-            return list(value)
-        if isinstance(value, str):
-            try:
-                return json.loads(value)
-            except Exception:
-                return []
-        return value
+        if dialect.name != "postgresql":
+            raise RuntimeError("Only PostgreSQL with pgvector is supported; result conversion not possible.")
+        if hasattr(value, "tolist"):
+            return value.tolist()
+        return list(value)
 
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
@@ -52,5 +44,7 @@ class DocumentChunk(Base):
     chunk_text = Column(Text, nullable=False)
     metadata_json = Column(Text, nullable=True)
     embedding = Column(EmbeddingVector, nullable=False)
+    # New column for re-embedding with OpenAI 1536‑dim vectors (nullable until job completes)
+    embedding_new = Column(Vector(1536), nullable=True)  # 1536‑dim OpenAI embeddings
 
     document = relationship("Document", back_populates="chunks")

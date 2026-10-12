@@ -64,7 +64,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({ message, isStreaming
                   SAP Knowledge Assistant
                 </span>
                 <SourceTypeBadge sourceType={message.source_type} />
-                <GroundingScoreBadge score={message.grounding_score} />
+                {message.source_type !== 'refusal' && <GroundingScoreBadge score={message.grounding_score} />}
               </div>
 
               {/* Action buttons */}
